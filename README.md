@@ -1,0 +1,2 @@
+# kaggle_digit_recognizer
+kaggle竞赛_手写数字识别
