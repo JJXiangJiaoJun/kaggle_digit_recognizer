@@ -76,6 +76,7 @@ class get_mini_batch(object):
         #至此已经选出mini-batch所以要对image进行标准化
         x_tr = self.x_train[self.select_array[start:end]]
         y_tr = self.y_train[self.select_array[start:end]]
+
         
         return x_tr,y_tr
 
@@ -85,7 +86,7 @@ class get_mini_batch(object):
 # In[3]:
 
 
-def inference(images , batch_size ,n_classes):
+def inference(images , batch_size ,n_classes ,dropout1_ratio,dropout2_ratio):
     '''
     参数说明:
     images：输入图像batch 4D-tensor shape =[batchsize,image_width,image_height,channel]
@@ -147,41 +148,56 @@ def inference(images , batch_size ,n_classes):
         dim = reshape.get_shape()[1].value
         
         weights = tf.get_variable('weights',
-                                   shape = [dim,64],
+                                   shape = [dim,512],
                                    dtype = tf.float32,
                                    initializer=tf.truncated_normal_initializer(stddev=0.005,dtype=tf.float32))
         biases  = tf.get_variable('biases',
-                                   shape = [64],
+                                   shape = [512],
                                    dtype = tf.float32,
                                    initializer= tf.constant_initializer(0.1))
         fc1 = tf.nn.relu(tf.matmul(reshape,weights)+biases,name=scope.name)
-     
+
+
+    #加入一个dropout1
+
+    with tf.variable_scope('dropout1') as scope :
+
+        keep_prob1 = tf.constant(dropout1_ratio,dtype=tf.float32)
+        dropout1 = tf.nn.dropout(fc1,keep_prob=keep_prob1)
+
+
     #full-connect2
     with tf.variable_scope('fc2') as scope:
         
         weights = tf.get_variable('weights',
-                                   shape=[64,64],
+                                   shape=[512,1024],
                                    dtype=tf.float32,
                                    initializer=tf.truncated_normal_initializer(stddev=0.005,dtype=tf.float32))
         biases  = tf.get_variable('biases',
-                                  shape=[64],
+                                  shape=[1024],
                                   dtype=tf.float32,
                                   initializer=tf.constant_initializer(0.1))
-        fc2 = tf.nn.relu(tf.matmul(fc1,weights)+biases,name=scope.name)
-        
+        fc2 = tf.nn.relu(tf.matmul(dropout1,weights)+biases,name=scope.name)
+
+
+    #dropout2
+    with tf.variable_scope('dropout2') as scope :
+
+        keep_prob2 = tf.constant(dropout2_ratio, dtype=tf.float32)
+        dropout2 = tf.nn.dropout(fc2,keep_prob=keep_prob2)
         
     #soft-max output
     with tf.variable_scope('soft_max') as scope:
         
         weights =tf.get_variable('weights',
-                                 shape = [64,n_classes],
+                                 shape = [1024,n_classes],
                                  dtype =tf.float32,
                                   initializer=tf.truncated_normal_initializer(stddev=0.005,dtype=tf.float32))
         biases = tf.get_variable('biases',
                                  shape=[n_classes],
                                 dtype=tf.float32,
                                 initializer=tf.constant_initializer(0.1))
-        softmax_linear = tf.add(tf.matmul(fc2,weights),biases,name=scope.name)
+        softmax_linear = tf.add(tf.matmul(dropout2,weights),biases,name=scope.name)
         
     
     return softmax_linear
@@ -246,7 +262,7 @@ BATCH_SIZE = 50
 IMG_H = 28
 IMG_W = 28
 n_classes = 10
-MAX_STEP  = 50000
+MAX_STEP  = 30000
 learning_rate = 0.0001
 
 
@@ -256,45 +272,46 @@ learning_rate = 0.0001
 def run_training():
     train_data = pd.read_csv('data/train.csv')
     logs_train_dir = 'logs/train/'
-    
-    
-    x = tf.placeholder(tf.float32,shape = [BATCH_SIZE,IMG_W,IMG_H,1])
-    y_= tf.placeholder(tf.int64,shape=[BATCH_SIZE])
-    
-    
-    batch_generater = get_mini_batch(train_data,BATCH_SIZE,IMG_H,IMG_W,channel=1)
-    logits  = inference(x,BATCH_SIZE,n_classes)
-    loss    = losses(logits,y_)
-    acc     = evaluation(logits,y_)
-    train_op = trainning(loss,learning_rate=learning_rate)
-    
 
-    with tf.Session()  as sess:
-        saver = tf.train.Saver()
-        sess.run(tf.global_variables_initializer())
+    with tf.Graph().as_default():
+    
+        x = tf.placeholder(tf.float32,shape = [BATCH_SIZE,IMG_W,IMG_H,1])
+        y_= tf.placeholder(tf.int64,shape=[BATCH_SIZE])
 
-        # summary_op =tf.summary.merge_all()
-        # train_writer = tf.summary.FileWriter(logs_train_dir,sess.graph)
-        print('Start Trainning')
-        try:
-            for step in np.arange(MAX_STEP):
-                tra_image ,tra_label = batch_generater.next_batch()
-                ll, _ , tra_loss ,tra_acc =sess.run([logits,train_op,loss,acc],
-                                                feed_dict={x:tra_image,y_:tra_label})
-                if (batch_generater.current_epoch - int(batch_generater.current_epoch))==0:
-                    print('Epoch %d , train loss = %.2f , train accuracy=%.2f%%'%(int(batch_generater.current_epoch),tra_loss,tra_acc*100))
 
-                if step % 50 == 0:
-                    print('Step %d, train loss = %.2f, train accuracy = %.2f%%' %(step, tra_loss, tra_acc*100.0))
-                    # with tf.Graph().as_default():
-                    #     summary_str = sess.run(summary_op)
-                    #     train_writer.add_summary(summary_str, step)
+        batch_generater = get_mini_batch(train_data,BATCH_SIZE,IMG_H,IMG_W,channel=1)
+        logits  = inference(x,BATCH_SIZE,n_classes,0.75,0.75)
 
-                if step % 2000 == 0 or (step+1)==MAX_STEP:
-                    checkpoint_path = os.path.join(logs_train_dir,'model.ckpt')
-                    saver.save(sess,checkpoint_path,global_step=step)
-        except tf.errors.OutOfRangeError:
-            print('Done trainning -- epoch limit reached')
+        loss    = losses(logits,y_)
+        acc     = evaluation(logits,y_)
+        train_op = trainning(loss,learning_rate=learning_rate)
+
+
+
+        with tf.Session()  as sess:
+            saver = tf.train.Saver()
+            sess.run(tf.global_variables_initializer())
+
+            #summary_op =tf.summary.merge_all()
+            #train_writer = tf.summary.FileWriter(logs_train_dir,sess.graph)
+            print('Start Trainning')
+            try:
+                for step in np.arange(MAX_STEP):
+                    tra_image ,tra_label = batch_generater.next_batch()
+                    ll, _ , tra_loss ,tra_acc =sess.run([logits,train_op,loss,acc],
+                                                    feed_dict={x:tra_image,y_:tra_label})
+
+                    if step % 50 == 0:
+                        print('Step %d, train loss = %.2f, train accuracy = %.2f%%' %(step, tra_loss, tra_acc*100.0))
+                        # with tf.Graph().as_default():
+                        #summary_str = sess.run(summary_op)
+                        #train_writer.add_summary(summary_str, step)
+
+                    if step % 2000 == 0 or (step+1)==MAX_STEP:
+                        checkpoint_path = os.path.join(logs_train_dir,'model.ckpt')
+                        saver.save(sess,checkpoint_path,global_step=step)
+            except tf.errors.OutOfRangeError:
+                print('Done trainning -- epoch limit reached')
 
 
 class get_test_image(object):
@@ -331,7 +348,7 @@ class get_test_image(object):
         self.index += self.mini_batch_size
         return x_tr
     def data_is_over(self):
-        if self.index==self.num:
+        if self.index == self.num:
             return True
         else:
             return False
@@ -354,7 +371,7 @@ def predict_the_test_image():
 
         x_test = tf.placeholder(tf.float32,shape=[BATCH_SIZE,28,28,1])
 
-        logits = inference(x_test,BATCH_SIZE,N_CLASSES)
+        logits = inference(x_test,BATCH_SIZE,N_CLASSES,1,1)
 
         logits = tf.nn.softmax(logits)
 
